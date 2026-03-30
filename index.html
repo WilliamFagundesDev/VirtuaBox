@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Punch-Out AI - Tracking Avançado</title>
+    
+    <!-- Bibliotecas MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" />
+
+    <style>
+        :root {
+            --primary-color: #ff3366; 
+            --accent-color: #00e5ff;
+            --danger-color: #ff0000;
+            --success-color: #4CAF50;
+            --bg-overlay: rgba(10, 15, 30, 0.9);
+        }
+
+        * {
+            margin: 0; padding: 0; box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body, html {
+            width: 100%; height: 100%; overflow: hidden;
+            background-color: #050505; color: #fff;
+        }
+
+        #game-container { position: relative; width: 100vw; height: 100vh; }
+        #webcam { display: none; }
+        
+        #game-canvas {
+            display: block; width: 100%; height: 100%;
+            filter: contrast(1.1) saturate(1.2);
+        }
+
+        /* --- HUD --- */
+        .hud-container {
+            position: absolute; top: 0; left: 0; width: 100%;
+            padding: 30px 50px; display: flex; justify-content: space-between;
+            align-items: flex-start; z-index: 5; pointer-events: none;
+        }
+
+        .health-wrapper {
+            width: 35%; background: rgba(0,0,0,0.6); padding: 15px;
+            border-radius: 10px; border: 2px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(5px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        .health-title {
+            font-size: 1.5rem; font-weight: bold; text-transform: uppercase;
+            margin-bottom: 8px; text-shadow: 2px 2px 4px #000; display: flex; align-items: center; gap: 10px;
+        }
+
+        .health-bar-bg {
+            width: 100%; height: 30px; background: #333; border-radius: 15px;
+            overflow: hidden; border: 2px solid #000; box-shadow: inset 0 3px 5px rgba(0,0,0,0.5);
+        }
+
+        .health-bar-fill { height: 100%; width: 100%; transition: width 0.2s ease, background-color 0.3s ease; }
+        #player-health-fill { background: linear-gradient(90deg, #00e5ff, #0055ff); width: 100%; }
+        #robot-health-fill { background: linear-gradient(90deg, #ff9900, #ff0000); width: 100%; }
+
+        /* --- SISTEMA DE STAMINA (FÔLEGO) --- */
+        .stamina-container {
+            margin-top: 15px; display: flex; flex-direction: column; gap: 8px;
+        }
+        .stamina-bar {
+            display: flex; align-items: center; gap: 10px; font-size: 0.9rem;
+        }
+        .stamina-label {
+            width: 85px; font-weight: bold; color: #ccc; text-transform: uppercase; font-size: 0.8rem;
+        }
+        .stamina-bg {
+            flex-grow: 1; height: 14px; background: #222; border-radius: 7px; 
+            overflow: hidden; border: 1px solid #555; position: relative; box-shadow: inset 0 2px 4px rgba(0,0,0,0.8);
+        }
+        .stamina-fill {
+            height: 100%; width: 100%; transition: width 0.1s linear, background-color 0.3s;
+        }
+        .dodge-color { background: #00e5ff; }
+        .block-color { background: #4CAF50; }
+        .stamina-fill.locked { background: #ff0000 !important; }
+        .stamina-locked-text {
+            position: absolute; width: 100%; text-align: center; top: -1px; 
+            font-size: 0.7rem; font-weight: bold; color: #fff; text-shadow: 1px 1px 2px #000; letter-spacing: 1px;
+        }
+
+        .center-hud { display: flex; flex-direction: column; align-items: center; }
+        .vs-badge { font-size: 3rem; font-weight: 900; font-style: italic; color: #ffcc00; text-shadow: 0 0 15px #ff0000, 2px 2px 0 #000; }
+        
+        .action-alert {
+            margin-top: 15px; font-size: 2.2rem; font-weight: bold; color: #fff;
+            text-transform: uppercase; text-shadow: 0 0 15px #000; opacity: 0;
+            transition: opacity 0.2s; display: flex; align-items: center; gap: 10px;
+        }
+
+        /* Telas de Overlay */
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: var(--bg-overlay); z-index: 10; transition: opacity 0.3s ease;
+        }
+        .screen.hidden { display: none !important; }
+
+        .screen h1 {
+            font-size: 5rem; margin-bottom: 10px; text-transform: uppercase;
+            letter-spacing: 5px; color: var(--primary-color);
+            text-shadow: 0 0 20px rgba(255, 51, 102, 0.6), 4px 4px 0 #000; font-style: italic;
+        }
+
+        .instructions {
+            background: rgba(0,0,0,0.5); padding: 25px 45px; border-radius: 15px;
+            border: 1px solid rgba(255,255,255,0.2); text-align: left; margin-bottom: 30px;
+            font-size: 1.2rem; line-height: 1.8; max-width: 800px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .instructions h3 { text-align: center; color: #fff; margin-bottom: 15px; font-size: 1.6rem; }
+        .instructions p { margin-bottom: 10px; display: flex; align-items: center; gap: 15px; }
+        .instructions i { width: 30px; text-align: center; font-size: 1.5rem; }
+        .highlight { color: var(--accent-color); font-weight: bold; }
+        .highlight-danger { color: var(--danger-color); font-weight: bold; }
+
+        .difficulty-selector { display: flex; gap: 20px; margin-bottom: 30px; }
+        .btn-diff {
+            padding: 15px 30px; font-size: 1.3rem; font-weight: bold; cursor: pointer;
+            background: #222; color: #aaa; border: 2px solid #555; border-radius: 10px;
+            transition: all 0.2s; text-transform: uppercase; display: flex; align-items: center; gap: 10px;
+        }
+        .btn-diff:hover { background: #333; color: #fff; }
+        .btn-diff.selected[data-diff="facil"] { background: var(--success-color); border-color: #fff; color: #fff; box-shadow: 0 0 15px var(--success-color); }
+        .btn-diff.selected[data-diff="media"] { background: var(--warning-color); border-color: #fff; color: #fff; box-shadow: 0 0 15px var(--warning-color); }
+        .btn-diff.selected[data-diff="dificil"] { background: var(--danger-color); border-color: #fff; color: #fff; box-shadow: 0 0 15px var(--danger-color); }
+
+        .btn-start {
+            padding: 20px 60px; font-size: 2rem; font-weight: 900; cursor: pointer;
+            background: var(--primary-color); color: white; border: none; border-radius: 15px;
+            box-shadow: 0 8px 0 #990033; transition: all 0.1s ease; text-transform: uppercase;
+            letter-spacing: 2px; display: flex; align-items: center; gap: 15px;
+        }
+        .btn-start:active { transform: translateY(8px); box-shadow: 0 0 0 #990033; }
+        .btn-start:disabled { background: #444; box-shadow: 0 8px 0 #222; cursor: not-allowed; color: #888; }
+        .loading-text { margin-top: 20px; font-size: 1.1rem; color: #888; font-style: italic; display: flex; align-items: center; gap: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- HUD -->
+        <div id="hud-container" class="hud-container hidden">
+            <div class="health-wrapper">
+                <div class="health-title" style="color: var(--accent-color);"><i class="fa-solid fa-user-ninja"></i> Você</div>
+                <div class="health-bar-bg"><div id="player-health-fill" class="health-bar-fill"></div></div>
+                
+                <!-- BARRAS DE STAMINA -->
+                <div class="stamina-container">
+                    <div class="stamina-bar">
+                        <div class="stamina-label"><i class="fa-solid fa-person-running" style="color: #00e5ff;"></i> Esquiva</div>
+                        <div class="stamina-bg">
+                            <div id="dodge-fill" class="stamina-fill dodge-color"></div>
+                            <div id="dodge-text" class="stamina-locked-text"></div>
+                        </div>
+                    </div>
+                    <div class="stamina-bar">
+                        <div class="stamina-label"><i class="fa-solid fa-shield" style="color: #4CAF50;"></i> Defesa</div>
+                        <div class="stamina-bg">
+                            <div id="block-fill" class="stamina-fill block-color"></div>
+                            <div id="block-text" class="stamina-locked-text"></div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            <div class="center-hud">
+                <div class="vs-badge">VS</div>
+                <div id="action-alert" class="action-alert"><i class="fa-solid fa-shield-halved"></i> BLOQUEIO!</div>
+            </div>
+            <div class="health-wrapper" style="text-align: right;">
+                <div class="health-title" style="color: #ff9900; justify-content: flex-end;">Robô <i class="fa-solid fa-robot"></i></div>
+                <div class="health-bar-bg" style="display: flex; justify-content: flex-end;">
+                    <div id="robot-health-fill" class="health-bar-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="game-canvas"></canvas>
+
+        <!-- Tela de Início -->
+        <div id="start-screen" class="screen">
+            <h1><i class="fa-solid fa-hand-fist"></i> Punch-Out AI</h1>
+            <div class="instructions">
+                <h3>SISTEMA BIOMECÂNICO ATIVO</h3>
+                <p><i class="fa-solid fa-hand-back-fist" style="color: var(--accent-color);"></i> <span><strong class="highlight">SOCO:</strong> Estique o braço e <strong class="highlight" style="color:#ffcc00;">RECOLHA-O</strong> para bater novamente! A IA impede socos infinitos com o braço parado.</span></p>
+                <p><i class="fa-solid fa-shield" style="color: #4CAF50;"></i> <span><strong class="highlight">DEFESA:</strong> Junte os pulsos na altura do nariz. Cuidado com o Fôlego (Max 5s).</span></p>
+                <p><i class="fa-solid fa-person-running" style="color: #00e5ff;"></i> <span><strong class="highlight">ESQUIVA:</strong> Incline o tronco para as laterais! Cuidado com o Fôlego (Max 5s).</span></p>
+                <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.2); margin: 15px 0;">
+                <p style="font-size: 1rem; color: #ccc; text-align: center; display: block;">
+                    <i class="fa-solid fa-triangle-exclamation" style="color: var(--danger-color);"></i> 
+                    <em>Dica: O Robô ataca quando brilhar em vermelho. Se você esquivar, ele fica tonto!</em>
+                </p>
+            </div>
+
+            <div class="difficulty-selector">
+                <button class="btn-diff selected" data-diff="facil"><i class="fa-solid fa-child-reaching"></i> Fácil</button>
+                <button class="btn-diff" data-diff="media"><i class="fa-solid fa-khanda"></i> Média</button>
+                <button class="btn-diff" data-diff="dificil"><i class="fa-solid fa-skull"></i> Difícil</button>
+            </div>
+
+            <button id="start-btn" class="btn-start" disabled><i class="fa-solid fa-spinner fa-spin"></i> Calibrando Lentes</button>
+            <div id="loading-text" class="loading-text"><i class="fa-solid fa-microchip"></i> Inicializando rastreamento de profundidade...</div>
+        </div>
+
+        <!-- Tela Final -->
+        <div id="game-over-screen" class="screen hidden">
+            <h1 id="end-title" style="font-size: 6rem; display: flex; align-items: center; gap: 20px;">
+                <i class="fa-solid fa-trophy"></i> NOCAUTE!
+            </h1>
+            <p id="end-message" style="font-size: 1.5rem; margin-bottom: 40px; color: #fff;"></p>
+            <button id="restart-btn" class="btn-start"><i class="fa-solid fa-rotate-right"></i> Lutar Novamente</button>
+        </div>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('game-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const hudContainer = document.getElementById('hud-container');
+        const startBtn = document.getElementById('start-btn');
+        const restartBtn = document.getElementById('restart-btn');
+        const loadingText = document.getElementById('loading-text');
+        
+        const playerHealthFill = document.getElementById('player-health-fill');
+        const robotHealthFill = document.getElementById('robot-health-fill');
+        const actionAlert = document.getElementById('action-alert');
+        const endTitle = document.getElementById('end-title');
+        const endMessage = document.getElementById('end-message');
+        const diffButtons = document.querySelectorAll('.btn-diff');
+
+        // Referências do Fôlego/Stamina
+        const dodgeFillEl = document.getElementById('dodge-fill');
+        const dodgeTextEl = document.getElementById('dodge-text');
+        const blockFillEl = document.getElementById('block-fill');
+        const blockTextEl = document.getElementById('block-text');
+
+        // Assets
+        const assets = {
+            robo_idle: new Image(), robo_telegraph: new Image(), robo_attack: new Image(),
+            robo_stunned: new Image(), luva_esq: new Image(), luva_dir: new Image(), bg_ring: new Image()
+        };
+        assets.robo_idle.src = 'assets/robo_idle.png'; assets.robo_telegraph.src = 'assets/robo_attack_prep.png';
+        assets.robo_attack.src = 'assets/robo_attack.png'; assets.robo_stunned.src = 'assets/robo_stunned.png';
+        assets.luva_esq.src = 'assets/luva_esq.png'; assets.luva_dir.src = 'assets/luva_dir.png'; assets.bg_ring.src = 'assets/bg_ring.jpg';
+
+        const sounds = {
+            bgm: new Audio('sounds/bgm_boxing.mp3'), punch_player: new Audio('sounds/punch.mp3'),
+            punch_robot: new Audio('sounds/robot_punch.mp3'), block: new Audio('sounds/block.mp3'),
+            dodge: new Audio('sounds/dodge.mp3'), stun: new Audio('sounds/stun.mp3'),
+            ko: new Audio('sounds/ko.mp3'), win: new Audio('sounds/win.mp3')
+        };
+        sounds.bgm.loop = true; sounds.bgm.volume = 0.3;
+        function playSound(key) { if(sounds[key]){ const c = sounds[key].cloneNode(); c.volume = 0.8; c.play().catch(()=>{}); } }
+
+        // Variáveis e Config
+        let isGameRunning = false; let animationFrameId; let cameraReady = false;
+        let config = { telegraphTime: 90, stunTime: 120, robotDmg: 10, playerDmg: 5, attackFreq: 0.01 };
+        
+        const MAX_STAMINA = 300; // Baseado em ~60fps, 300 frames = ~5 segundos
+
+        let player = {
+            hp: 100, maxHp: 100, 
+            state: 'idle',
+            intendedState: 'idle',
+            stamina: { dodge: MAX_STAMINA, block: MAX_STAMINA },
+            locks: { dodge: false, block: false },
+            wrists: { left: {x:0, y:0, z:0}, right: {x:0, y:0, z:0} },
+            trailL: [], trailR: [], // Rastro de movimento da luva
+            isPunchingL: false, isPunchingR: false,
+            hasHitL: false, hasHitR: false, // Travas Anti-Spam de soco
+            flashTimer: 0
+        };
+
+        let robot = {
+            hp: 100, maxHp: 100, state: 'idle', timer: 0,
+            x: 0, y: 0, width: 300, height: 400, flashTimer: 0
+        };
+
+        let particles = []; let floatingTexts = []; let screenShake = 0;
+        let renderMetrics = { dW: 0, dH: 0, dX: 0, dY: 0 };
+        
+        // Efeitos Visuais Extras
+        const comicWordsNormal = ["POW!", "BAM!", "TOMA!", "SMASH!", "ZAP!"];
+        const comicWordsCrit = ["CRÍTICO!", "BOOM!", "KABLAM!", "PERFEITO!"];
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            robot.x = canvasElement.width / 2;
+            robot.y = canvasElement.height * 0.45; 
+            robot.height = canvasElement.height * 0.6;
+            robot.width = robot.height * 0.75;
+            calculateRenderMetrics();
+        }
+        window.addEventListener('resize', resizeCanvas);
+        
+        function calculateRenderMetrics() {
+            if (!videoElement.videoWidth) return;
+            const vRatio = videoElement.videoWidth / videoElement.videoHeight;
+            const cRatio = canvasElement.width / canvasElement.height;
+            if (cRatio > vRatio) {
+                renderMetrics.dW = canvasElement.width;
+                renderMetrics.dH = canvasElement.width / vRatio;
+                renderMetrics.dX = 0;
+                renderMetrics.dY = (canvasElement.height - renderMetrics.dH) / 2;
+            } else {
+                renderMetrics.dW = canvasElement.height * vRatio;
+                renderMetrics.dH = canvasElement.height;
+                renderMetrics.dX = (canvasElement.width - renderMetrics.dW) / 2;
+                renderMetrics.dY = 0;
+            }
+        }
+        
+        videoElement.addEventListener('loadedmetadata', calculateRenderMetrics);
+
+        function mapLandmark(landmark) {
+            return {
+                x: renderMetrics.dX + (1 - landmark.x) * renderMetrics.dW,
+                y: renderMetrics.dY + landmark.y * renderMetrics.dH,
+                z: landmark.z
+            };
+        }
+
+        // ==========================================
+        // MEDIA PIPE POSE - BIOMECÂNICA
+        // ==========================================
+        const pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+        pose.setOptions({
+            modelComplexity: 1, 
+            smoothLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6
+        });
+
+        pose.onResults((results) => {
+            if (!cameraReady) {
+                cameraReady = true; startBtn.disabled = false;
+                startBtn.innerHTML = '<i class="fa-solid fa-play"></i> Iniciar Combate';
+                loadingText.innerHTML = '<i class="fa-solid fa-circle-check" style="color: var(--success-color);"></i> Biomecânica Calibrada!';
+            }
+
+            if (results.poseLandmarks) {
+                const lm = results.poseLandmarks;
+                
+                const nose = mapLandmark(lm[0]);
+                const leftShoulder = mapLandmark(lm[11]);
+                const rightShoulder = mapLandmark(lm[12]);
+                const rawLeftWrist = mapLandmark(lm[15]);
+                const rawRightWrist = mapLandmark(lm[16]);
+                const leftIndex = mapLandmark(lm[19]); 
+                const rightIndex = mapLandmark(lm[20]); 
+                const leftHip = mapLandmark(lm[23]);
+                const rightHip = mapLandmark(lm[24]);
+
+                const leftWrist = {
+                    x: (rawLeftWrist.x + leftIndex.x * 2) / 3,
+                    y: (rawLeftWrist.y + leftIndex.y * 2) / 3,
+                    z: leftIndex.z
+                };
+                const rightWrist = {
+                    x: (rawRightWrist.x + rightIndex.x * 2) / 3,
+                    y: (rawRightWrist.y + rightIndex.y * 2) / 3,
+                    z: rightIndex.z
+                };
+
+                player.wrists.left = leftWrist;
+                player.wrists.right = rightWrist;
+
+                const hipsCenter_x = (leftHip.x + rightHip.x) / 2;
+                const shoulderCenter_x = (leftShoulder.x + rightShoulder.x) / 2;
+                const upperBodyLean = ((nose.x + shoulderCenter_x) / 2) - hipsCenter_x;
+                const dodgeThreshold = renderMetrics.dW * 0.08; 
+                
+                const wristDistPx = Math.abs(leftWrist.x - rightWrist.x);
+                const shouldersY = (leftShoulder.y + rightShoulder.y) / 2;
+                
+                if (wristDistPx < renderMetrics.dW * 0.20 && leftWrist.y < shouldersY + 50 && rightWrist.y < shouldersY + 50) {
+                    player.intendedState = 'blocking';
+                } else if (upperBodyLean > dodgeThreshold) {
+                    player.intendedState = 'dodging_right';
+                } else if (upperBodyLean < -dodgeThreshold) {
+                    player.intendedState = 'dodging_left';
+                } else {
+                    player.intendedState = 'idle';
+                }
+
+                // --- SISTEMA DE SOCO COM RECOLHIMENTO (ANTI-SPAM) ---
+                const punchThresholdZ = -0.15; 
+                
+                player.isPunchingL = (leftWrist.z < lm[11].z + punchThresholdZ) && leftWrist.y < shouldersY + 100;
+                if (!player.isPunchingL) player.hasHitL = false; 
+
+                player.isPunchingR = (rightWrist.z < lm[12].z + punchThresholdZ) && rightWrist.y < shouldersY + 100;
+                if (!player.isPunchingR) player.hasHitR = false; 
+            }
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await pose.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        camera.start();
+
+        // ==========================================
+        // DIFICULDADE & CLASSES VISUAIS (VFX)
+        // ==========================================
+        diffButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                diffButtons.forEach(b => b.classList.remove('selected'));
+                e.currentTarget.classList.add('selected');
+                const diff = e.currentTarget.dataset.diff;
+                if (diff === 'facil') config = { telegraphTime: 90, stunTime: 120, robotDmg: 10, playerDmg: 5, attackFreq: 0.01 };
+                else if (diff === 'media') config = { telegraphTime: 60, stunTime: 90, robotDmg: 15, playerDmg: 4, attackFreq: 0.02 };
+                else if (diff === 'dificil') config = { telegraphTime: 35, stunTime: 60, robotDmg: 25, playerDmg: 3, attackFreq: 0.035 };
+            });
+        });
+
+        class FloatingText {
+            constructor(x, y, text, color) {
+                this.x = x + (Math.random() - 0.5) * 50; 
+                this.y = y; 
+                this.text = text; 
+                this.color = color;
+                this.life = 1.0;
+                this.scale = 0.2; // Começa pequeno
+                this.rotation = (Math.random() - 0.5) * 0.4; // Leve rotação estilo HQ
+                this.speedY = -3 - Math.random() * 2;
+            }
+            update() { 
+                this.y += this.speedY; 
+                this.life -= 0.03; 
+                // Efeito Pop (Cresce rápido, depois diminui devagar)
+                if (this.scale < 1.5 && this.life > 0.7) this.scale += 0.25;
+                else this.scale = Math.max(0, this.scale - 0.02);
+            }
+            draw(ctx) {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.scale(this.scale, this.scale);
+                
+                ctx.font = "900 40px 'Segoe UI', Impact, sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                
+                // Sombra dura estilo comic
+                ctx.fillStyle = "#000";
+                ctx.fillText(this.text, 4, 4);
+                
+                // Borda grossa branca
+                ctx.lineWidth = 6;
+                ctx.strokeStyle = "#fff";
+                ctx.strokeText(this.text, 0, 0);
+                
+                // Preenchimento colorido
+                ctx.fillStyle = this.color;
+                ctx.fillText(this.text, 0, 0);
+                
+                ctx.restore();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color, shape = 'circle') {
+                this.x = x; this.y = y; this.color = color; this.shape = shape;
+                this.size = Math.random() * 8 + 3;
+                this.speedX = (Math.random() - 0.5) * 25; 
+                this.speedY = (Math.random() - 0.5) * 25 - 5; // Tendência a subir inicialmente
+                this.life = 1.0;
+                this.friction = 0.92; // Fricção do ar
+                this.gravity = 0.6; // Gravidade puxando pra baixo
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotSpeed = (Math.random() - 0.5) * 0.5;
+            }
+            update() { 
+                this.speedX *= this.friction;
+                this.speedY *= this.friction;
+                this.speedY += this.gravity;
+                this.x += this.speedX; 
+                this.y += this.speedY; 
+                this.rotation += this.rotSpeed;
+                this.life -= 0.03; 
+            }
+            draw(ctx) {
+                if (this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.life); 
+                ctx.fillStyle = this.color;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+
+                if (this.shape === 'star') {
+                    // Desenha Estrela (Crítico)
+                    ctx.beginPath();
+                    for(let i = 0; i < 5; i++) {
+                        ctx.lineTo(Math.cos((18+i*72)/180*Math.PI)*this.size, -Math.sin((18+i*72)/180*Math.PI)*this.size);
+                        ctx.lineTo(Math.cos((54+i*72)/180*Math.PI)*this.size*0.4, -Math.sin((54+i*72)/180*Math.PI)*this.size*0.4);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                } else if (this.shape === 'spark') {
+                    // Desenha faísca esticada na direção do movimento
+                    ctx.scale(1, 0.3);
+                    ctx.beginPath(); ctx.arc(0, 0, this.size, 0, Math.PI * 2); ctx.fill();
+                } else {
+                    ctx.beginPath(); ctx.arc(0, 0, this.size, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+
+        function spawnVFX(x, y, type) { 
+            if (type === 'critical') {
+                for (let i = 0; i < 15; i++) particles.push(new Particle(x, y, '#ffff00', 'star'));
+                for (let i = 0; i < 10; i++) particles.push(new Particle(x, y, '#ff0000', 'spark'));
+            } else if (type === 'hit') {
+                for (let i = 0; i < 20; i++) particles.push(new Particle(x, y, '#00e5ff', 'spark'));
+                for (let i = 0; i < 5; i++) particles.push(new Particle(x, y, '#ffffff', 'circle'));
+            } else if (type === 'block') {
+                for (let i = 0; i < 15; i++) particles.push(new Particle(x, y, '#aaaaaa', 'circle'));
+            } else if (type === 'damage') {
+                for (let i = 0; i < 30; i++) particles.push(new Particle(x, y, '#ff0000', 'circle')); // Sangue/Dano
+            }
+        }
+
+        // ==========================================
+        // GAME LOOP E UI
+        // ==========================================
+        function showActionAlert(text, iconClass, color) {
+            actionAlert.innerHTML = `<i class="fa-solid ${iconClass}"></i> ${text}`;
+            actionAlert.style.color = color; actionAlert.style.opacity = 1;
+            setTimeout(() => { actionAlert.style.opacity = 0; }, 800);
+        }
+
+        function updateHealthBars() {
+            playerHealthFill.style.width = `${Math.max(0, (player.hp / player.maxHp) * 100)}%`;
+            robotHealthFill.style.width = `${Math.max(0, (robot.hp / robot.maxHp) * 100)}%`;
+            if (player.hp < 30) playerHealthFill.style.background = 'linear-gradient(90deg, #ff0000, #990000)';
+            else playerHealthFill.style.background = 'linear-gradient(90deg, #00e5ff, #0055ff)';
+        }
+
+        function updateStaminaUI() {
+            dodgeFillEl.style.width = `${(player.stamina.dodge / MAX_STAMINA) * 100}%`;
+            if (player.locks.dodge) {
+                dodgeFillEl.classList.add('locked'); dodgeTextEl.innerText = 'ESGOTADO (10s)';
+            } else {
+                dodgeFillEl.classList.remove('locked'); dodgeTextEl.innerText = '';
+            }
+
+            blockFillEl.style.width = `${(player.stamina.block / MAX_STAMINA) * 100}%`;
+            if (player.locks.block) {
+                blockFillEl.classList.add('locked'); blockTextEl.innerText = 'ESGOTADO (5s)';
+            } else {
+                blockFillEl.classList.remove('locked'); blockTextEl.innerText = '';
+            }
+        }
+
+        function triggerGameOver(didWin) {
+            isGameRunning = false; sounds.bgm.pause();
+            hudContainer.classList.add('hidden'); gameOverScreen.classList.remove('hidden');
+            if (didWin) {
+                endTitle.innerHTML = '<i class="fa-solid fa-trophy"></i> VOCÊ VENCEU!';
+                endTitle.style.color = 'var(--accent-color)'; endMessage.innerText = "O robô virou sucata."; playSound('win');
+            } else {
+                endTitle.innerHTML = '<i class="fa-solid fa-skull-crossbones"></i> VOCÊ CAIU!';
+                endTitle.style.color = 'var(--danger-color)'; endMessage.innerText = "Faltou reflexo na esquiva..."; playSound('ko');
+            }
+            if (document.fullscreenElement) document.exitFullscreen();
+        }
+
+        function startGame() {
+            const elem = document.documentElement;
+            if (elem.requestFullscreen) elem.requestFullscreen().catch(()=>{});
+
+            resizeCanvas(); 
+            isGameRunning = true;
+            player.hp = player.maxHp; robot.hp = robot.maxHp;
+            
+            player.stamina.dodge = MAX_STAMINA; player.stamina.block = MAX_STAMINA;
+            player.locks.dodge = false; player.locks.block = false;
+            player.hasHitL = false; player.hasHitR = false;
+            player.trailL = []; player.trailR = [];
+
+            robot.state = 'idle'; robot.timer = 0; particles = []; floatingTexts = []; screenShake = 0;
+
+            updateHealthBars(); updateStaminaUI();
+            startScreen.classList.add('hidden'); gameOverScreen.classList.add('hidden'); hudContainer.classList.remove('hidden');
+            
+            sounds.bgm.currentTime = 0; sounds.bgm.play().catch(()=>{});
+            gameLoop();
+        }
+
+        function gameLoop() {
+            if (!isGameRunning) return;
+
+            // --- PROCESSAMENTO DO FÔLEGO (STAMINA) ---
+            if (player.intendedState === 'dodging_left' || player.intendedState === 'dodging_right') {
+                if (!player.locks.dodge) {
+                    player.state = player.intendedState;
+                    player.stamina.dodge -= 1; 
+                    if (player.stamina.dodge <= 0) {
+                        player.stamina.dodge = 0; player.locks.dodge = true; player.state = 'idle';     
+                    }
+                } else { player.state = 'idle'; }
+            } else {
+                if (player.stamina.dodge < MAX_STAMINA) {
+                    player.stamina.dodge += 0.5; 
+                    if (player.stamina.dodge >= MAX_STAMINA) { player.stamina.dodge = MAX_STAMINA; player.locks.dodge = false; }
+                }
+            }
+
+            if (player.intendedState === 'blocking') {
+                if (!player.locks.block) {
+                    player.state = 'blocking';
+                    player.stamina.block -= 1; 
+                    if (player.stamina.block <= 0) {
+                        player.stamina.block = 0; player.locks.block = true; player.state = 'idle';     
+                    }
+                } else { player.state = 'idle'; }
+            } else {
+                if (player.stamina.block < MAX_STAMINA) {
+                    player.stamina.block += 1.0;
+                    if (player.stamina.block >= MAX_STAMINA) { player.stamina.block = MAX_STAMINA; player.locks.block = false; }
+                }
+            }
+
+            if (player.intendedState === 'idle') player.state = 'idle';
+            updateStaminaUI(); 
+
+            // --- RENDERIZAÇÃO BASE ---
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.save();
+            
+            if (screenShake > 0) {
+                canvasCtx.translate((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40); screenShake--;
+            }
+
+            canvasCtx.save();
+            canvasCtx.translate(canvasElement.width, 0); canvasCtx.scale(-1, 1);
+            if (renderMetrics.dW > 0) {
+                canvasCtx.drawImage(videoElement, renderMetrics.dX, renderMetrics.dY, renderMetrics.dW, renderMetrics.dH);
+            }
+            canvasCtx.restore();
+            
+            canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.6)'; canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (assets.bg_ring.complete && assets.bg_ring.naturalWidth) {
+                canvasCtx.globalAlpha = 0.4; canvasCtx.drawImage(assets.bg_ring, 0, 0, canvasElement.width, canvasElement.height); canvasCtx.globalAlpha = 1.0;
+            }
+
+            // --- LÓGICA DO ROBÔ ---
+            let drawX = robot.x - robot.width / 2; let drawY = robot.y - robot.height / 2;
+            let currentRobotImage = assets.robo_idle; let robotColor = '#555'; 
+
+            if (robot.state === 'idle') {
+                drawY += Math.sin(Date.now() / 200) * 10;
+                if (Math.random() < config.attackFreq) { robot.state = 'telegraph'; robot.timer = config.telegraphTime; playSound('dodge'); }
+            } else if (robot.state === 'telegraph') {
+                currentRobotImage = assets.robo_telegraph; robotColor = '#ff9900'; robot.timer--;
+                drawX += (Math.random() - 0.5) * 10;
+                if (robot.timer <= 0) { robot.state = 'attack'; robot.timer = 15; playSound('punch_robot'); }
+            } else if (robot.state === 'attack') {
+                currentRobotImage = assets.robo_attack; robotColor = '#ff0000';
+                drawY += 50; drawX += (Math.random() - 0.5) * 20; robot.timer--;
+
+                if (robot.timer === 10) { 
+                    if (player.state === 'dodging_left' || player.state === 'dodging_right') {
+                        showActionAlert("ESQUIVA!", "fa-bolt", "#00e5ff");
+                        robot.state = 'stunned'; robot.timer = config.stunTime; playSound('stun');
+                    } else if (player.state === 'blocking') {
+                        showActionAlert("BLOQUEADO!", "fa-shield-halved", "#4CAF50");
+                        player.hp -= config.robotDmg / 4; playSound('block');
+                        spawnVFX(canvasElement.width/2, canvasElement.height/2, 'block'); robot.state = 'idle'; 
+                    } else {
+                        player.hp -= config.robotDmg; player.flashTimer = 10; screenShake = 20;
+                        spawnVFX(canvasElement.width/2, canvasElement.height/2, 'damage'); robot.state = 'idle';
+                    }
+                    updateHealthBars(); if (player.hp <= 0) triggerGameOver(false);
+                }
+            } else if (robot.state === 'stunned') {
+                currentRobotImage = assets.robo_stunned; robotColor = '#00e5ff'; robot.timer--;
+                drawX += Math.sin(Date.now() / 50) * 15;
+                if (robot.timer <= 0) robot.state = 'idle';
+            }
+
+            if (currentRobotImage.complete && currentRobotImage.naturalWidth) {
+                canvasCtx.drawImage(currentRobotImage, drawX, drawY, robot.width, robot.height);
+            } else {
+                canvasCtx.fillStyle = robotColor; canvasCtx.fillRect(drawX, drawY, robot.width, robot.height); 
+                canvasCtx.fillStyle = '#222'; canvasCtx.fillRect(drawX + robot.width*0.2, drawY - robot.height*0.3, robot.width*0.6, robot.height*0.3); 
+                canvasCtx.fillStyle = robot.state === 'telegraph' ? '#ff0000' : (robot.state === 'stunned' ? '#ffff00' : '#00e5ff');
+                if (robot.state === 'stunned') { canvasCtx.font = "bold 50px Arial"; canvasCtx.fillText("X   X", drawX + robot.width*0.3, drawY - robot.height*0.1); } 
+                else { canvasCtx.fillRect(drawX + robot.width*0.3, drawY - robot.height*0.2, 30, 15); canvasCtx.fillRect(drawX + robot.width*0.6, drawY - robot.height*0.2, 30, 15); }
+            }
+
+            if (robot.flashTimer > 0) {
+                canvasCtx.globalAlpha = 0.5; canvasCtx.fillStyle = '#fff';
+                canvasCtx.fillRect(drawX, drawY - 100, robot.width, robot.height + 100);
+                canvasCtx.globalAlpha = 1.0; robot.flashTimer--;
+            }
+
+            // --- VFX: FEEDBACK DE DEFESA E ESQUIVA ---
+            if (player.state === 'blocking' && player.wrists.left.x !== 0 && player.wrists.right.x !== 0) {
+                const midX = (player.wrists.left.x + player.wrists.right.x) / 2;
+                const midY = (player.wrists.left.y + player.wrists.right.y) / 2;
+                const shieldSize = 140;
+
+                canvasCtx.save();
+                canvasCtx.globalCompositeOperation = 'screen';
+                
+                // Círculo base pulsante
+                canvasCtx.beginPath();
+                canvasCtx.arc(midX, midY, shieldSize, 0, Math.PI * 2);
+                let grad = canvasCtx.createRadialGradient(midX, midY, shieldSize * 0.1, midX, midY, shieldSize);
+                grad.addColorStop(0, 'rgba(0, 255, 200, 0.6)');
+                grad.addColorStop(0.5, 'rgba(0, 200, 255, 0.3)');
+                grad.addColorStop(1, 'rgba(0, 200, 255, 0)');
+                canvasCtx.fillStyle = grad;
+                canvasCtx.fill();
+                
+                // Anéis High-Tech giratórios
+                const time = Date.now() / 500;
+                canvasCtx.translate(midX, midY);
+                canvasCtx.rotate(time);
+                canvasCtx.beginPath();
+                canvasCtx.arc(0, 0, shieldSize * 0.8, 0, Math.PI * 1.5);
+                canvasCtx.lineWidth = 8;
+                canvasCtx.strokeStyle = 'rgba(0, 255, 200, 0.8)';
+                canvasCtx.stroke();
+
+                canvasCtx.rotate(-time * 1.5);
+                canvasCtx.beginPath();
+                canvasCtx.arc(0, 0, shieldSize * 0.9, Math.PI * 0.5, Math.PI * 1.8);
+                canvasCtx.lineWidth = 4;
+                canvasCtx.strokeStyle = 'rgba(0, 150, 255, 0.6)';
+                canvasCtx.stroke();
+                
+                canvasCtx.restore();
+            } else if (player.state === 'dodging_left' || player.state === 'dodging_right') {
+                // ANIME SPEED LINES
+                const isLeft = player.state === 'dodging_left';
+                const w = canvasElement.width; const h = canvasElement.height;
+                const effectWidth = 400;
+                
+                canvasCtx.save();
+                
+                let grad = canvasCtx.createLinearGradient(isLeft ? 0 : w, 0, isLeft ? effectWidth : w - effectWidth, 0);
+                grad.addColorStop(0, 'rgba(0, 229, 255, 0.4)');
+                grad.addColorStop(1, 'rgba(0, 229, 255, 0)');
+                canvasCtx.fillStyle = grad;
+                canvasCtx.fillRect(isLeft ? 0 : w - effectWidth, 0, effectWidth, h);
+                
+                canvasCtx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                for(let i = 0; i < 15; i++) {
+                    let lineY = Math.random() * h;
+                    let lineLength = 50 + Math.random() * 250;
+                    let lineWidth = 1 + Math.random() * 4;
+                    let lineX = isLeft ? Math.random() * 200 : w - Math.random() * 200 - lineLength;
+                    canvasCtx.fillRect(lineX, lineY, lineLength, lineWidth);
+                }
+                canvasCtx.restore();
+            }
+
+            // --- LÓGICA DO JOGADOR (SOCOS C/ RECOLHIMENTO OBRIGATÓRIO) ---
+            const processPunch = (wrist, isPunching, isLeft) => {
+                let hasHit = isLeft ? player.hasHitL : player.hasHitR;
+
+                if (isPunching && !hasHit && player.state !== 'blocking') {
+                    if (wrist.x > robot.x - robot.width/2 && wrist.x < robot.x + robot.width/2 && wrist.y > robot.y - robot.height/2) {
+                        let dmg = config.playerDmg;
+                        let hitWord = ""; let hitColor = "";
+                        
+                        if (robot.state === 'stunned') { 
+                            dmg *= 2; 
+                            spawnVFX(wrist.x, wrist.y, 'critical'); 
+                            hitWord = comicWordsCrit[Math.floor(Math.random() * comicWordsCrit.length)];
+                            hitColor = "#ffcc00";
+                        } 
+                        else if (robot.state === 'telegraph' || robot.state === 'attack') { 
+                            dmg = 0; playSound('block'); spawnVFX(wrist.x, wrist.y, 'block'); 
+                            hitWord = "BLOCKED!"; hitColor = "#aaaaaa";
+                        } 
+                        else { 
+                            spawnVFX(wrist.x, wrist.y, 'hit'); 
+                            hitWord = comicWordsNormal[Math.floor(Math.random() * comicWordsNormal.length)];
+                            hitColor = isLeft ? "#ff3366" : "#00e5ff";
+                        }
+
+                        floatingTexts.push(new FloatingText(wrist.x, wrist.y - 50, hitWord, hitColor));
+
+                        if (dmg > 0) {
+                            robot.hp -= dmg; robot.flashTimer = 5; playSound('punch_player'); updateHealthBars();
+                            if (robot.hp <= 0) triggerGameOver(true);
+                        }
+
+                        if (isLeft) player.hasHitL = true;
+                        else player.hasHitR = true;
+                        
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            processPunch(player.wrists.left, player.isPunchingL, true);
+            processPunch(player.wrists.right, player.isPunchingR, false);
+
+            // --- DESENHA RASTRO DA LUVA E A LUVA ---
+            const updateAndDrawTrail = (wrist, isPunching, isLeft, trailArray) => {
+                if(wrist.x !== 0) {
+                    trailArray.push({x: wrist.x, y: wrist.y});
+                    if (trailArray.length > 6) trailArray.shift(); // Mantém os últimos 6 frames
+                }
+                
+                // Desenha Rastro se estiver socando
+                if (isPunching && trailArray.length > 2) {
+                    canvasCtx.save();
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(trailArray[0].x, trailArray[0].y);
+                    for(let i=1; i < trailArray.length; i++) {
+                        canvasCtx.lineTo(trailArray[i].x, trailArray[i].y);
+                    }
+                    canvasCtx.lineWidth = 40;
+                    canvasCtx.lineCap = "round";
+                    canvasCtx.lineJoin = "round";
+                    // Gradiente de velocidade
+                    let tGrad = canvasCtx.createLinearGradient(trailArray[0].x, trailArray[0].y, wrist.x, wrist.y);
+                    tGrad.addColorStop(0, 'rgba(0,0,0,0)');
+                    tGrad.addColorStop(1, isLeft ? 'rgba(255, 51, 102, 0.6)' : 'rgba(0, 229, 255, 0.6)');
+                    canvasCtx.strokeStyle = tGrad;
+                    canvasCtx.stroke();
+                    canvasCtx.restore();
+                }
+
+                // Desenha Luva
+                const gloveRadius = 60;
+                const scale = isPunching ? 1.5 : 1.0; 
+                const size = gloveRadius * 2 * scale;
+
+                const img = isLeft ? assets.luva_esq : assets.luva_dir;
+                if (img.complete && img.naturalWidth) {
+                    canvasCtx.drawImage(img, wrist.x - size/2, wrist.y - size/2, size, size);
+                    if (isPunching) {
+                        canvasCtx.beginPath(); canvasCtx.arc(wrist.x, wrist.y, size/2, 0, Math.PI * 2);
+                        canvasCtx.fillStyle = 'rgba(255, 255, 255, 0.4)'; canvasCtx.fill();
+                    }
+                } else {
+                    canvasCtx.beginPath(); canvasCtx.arc(wrist.x, wrist.y, size/2, 0, Math.PI * 2);
+                    canvasCtx.fillStyle = isPunching ? '#fff' : (isLeft ? '#ff3366' : '#00e5ff'); 
+                    canvasCtx.fill(); canvasCtx.lineWidth = 4; canvasCtx.strokeStyle = '#fff'; canvasCtx.stroke();
+                }
+            };
+
+            if (player.wrists.left.x !== 0) updateAndDrawTrail(player.wrists.left, player.isPunchingL, true, player.trailL);
+            if (player.wrists.right.x !== 0) updateAndDrawTrail(player.wrists.right, player.isPunchingR, false, player.trailR);
+
+            // Atualiza Partículas e Textos
+            particles.forEach(p => { p.update(); p.draw(canvasCtx); });
+            particles = particles.filter(p => p.life > 0);
+
+            floatingTexts.forEach(ft => { ft.update(); ft.draw(canvasCtx); });
+            floatingTexts = floatingTexts.filter(ft => ft.life > 0);
+
+            // Flash de Dano no Jogador (Por último para sobrepor a tela)
+            if (player.flashTimer > 0) {
+                canvasCtx.fillStyle = `rgba(255, 0, 0, ${player.flashTimer / 20})`;
+                canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+                player.flashTimer--;
+            }
+
+            canvasCtx.restore(); 
+            if (isGameRunning) animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && isGameRunning) {
+                isGameRunning = false; sounds.bgm.pause(); cancelAnimationFrame(animationFrameId);
+                hudContainer.classList.add('hidden'); gameOverScreen.classList.add('hidden'); startScreen.classList.remove('hidden');
+            }
+        });
+        document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && document.fullscreenElement) document.exitFullscreen(); });
+
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+
+    </script>
+</body>
+</html>
